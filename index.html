@@ -1,0 +1,302 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synth Pad</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #111;
+            color: #eee;
+            font-family: sans-serif;
+            overflow: hidden; /* Prevent scrollbars */
+        }
+
+        .pad-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-gap: 10px;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .pad {
+            aspect-ratio: 1/1; /* Maintain square aspect ratio */
+            border-radius: 15px;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #fff;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5); /* Subtle shadow */
+            transition: all 0.2s ease;
+            position: relative; /* For ripple effect */
+            overflow: hidden; /* For ripple effect */
+        }
+
+        .pad:hover {
+            opacity: 0.9;
+        }
+
+        .pad.active {
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.7);
+            transform: scale(0.95);
+        }
+
+        .pad-ripple {
+            position: absolute;
+            background-color: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            pointer-events: none;
+            animation: ripple 0.6s ease-out;
+            opacity: 0;
+            transform: scale(0);
+        }
+
+        @keyframes ripple {
+            from {
+                opacity: 1;
+                transform: scale(0);
+            }
+            to {
+                opacity: 0;
+                transform: scale(2);
+            }
+        }
+
+        .pad-name {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            pointer-events: none;
+        }
+
+        .pad:hover .pad-name {
+            opacity: 1;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 0 20px;
+        }
+
+        .controls > * {
+            margin: 0 10px;
+        }
+
+        .playing-notes {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            z-index: 10;
+        }
+
+
+        .wave-selector-container {
+            display: flex;
+            align-items: center;
+        }
+        .wave-selector-container label {
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="playing-notes">
+        Playing: <span id="playingNotes"></span>
+    </div>
+
+    <div class="controls">
+        <button id="octaveDown" class="btn btn-sm btn-secondary">- Octave</button>
+        <button id="octaveUp" class="btn btn-sm btn-secondary">+ Octave</button>
+        <div class="wave-selector-container">
+            <label for="waveformSelect">Waveform:</label>
+            <select id="waveformSelect" class="form-select form-select-sm" style="width: auto;">
+                <option value="sine">Sine</option>
+                <option value="square">Square</option>
+                <option value="sawtooth">Sawtooth</option>
+            </select>
+        </div>
+        <label for="volume">Volume:</label>
+        <input type="range" id="volume" min="0" max="1" step="0.01" value="0.5" class="form-range">
+    </div>
+
+    <div class="pad-grid">
+        <!-- Pads will be generated here -->
+    </div>
+
+    <script>
+        // Web Audio API setup
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const masterGain = audioContext.createGain();
+        masterGain.connect(audioContext.destination);
+        let currentWaveform = 'sine';
+        let currentVolume = 0.5;
+        let currentOctave = 4;
+        const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+        let playingNotes = [];
+        const playingNotesElement = document.getElementById('playingNotes');
+
+        // UI elements
+        const octaveUpButton = document.getElementById('octaveUp');
+        const octaveDownButton = document.getElementById('octaveDown');
+        const volumeControl = document.getElementById('volume');
+        const waveformSelect = document.getElementById('waveformSelect');
+
+
+        // Function to create a synth sound
+        function createSynth(frequency, waveform = 'sine') {
+            const oscillator = audioContext.createOscillator();
+            oscillator.type = waveform;
+            oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+            const gainNode = audioContext.createGain();
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime); // Start silent
+            gainNode.gain.linearRampToValueAtTime(currentVolume, audioContext.currentTime + 0.02); // Attack
+            gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.3); // Decay
+            oscillator.connect(gainNode);
+            gainNode.connect(masterGain);
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.3);
+            return { oscillator, gainNode };
+        }
+
+        function getFrequency(noteIndex, octave) {
+            const baseFrequency = 440; // A4
+            const semitoneOffset = noteIndex;
+            const octaveMultiplier = Math.pow(2, octave - 4);
+            return baseFrequency * Math.pow(2, semitoneOffset / 12) * octaveMultiplier;
+        }
+
+        function getNoteName(noteIndex) {
+            const noteNameIndex = noteIndex % 12;
+            const octave = Math.floor(noteIndex / 12) + 4; // Start at C4
+            return noteNames[noteNameIndex] + octave;
+        }
+
+
+
+        function playNote(padIndex) {
+            const frequency = getFrequency(padIndex, currentOctave);
+            const synth = createSynth(frequency, currentWaveform);
+
+            // Visual feedback
+            const pad = document.querySelector(`.pad[data-index="${padIndex}"]`);
+            if (pad) {
+                pad.classList.add('active');
+
+                const ripple = document.createElement('div');
+                ripple.classList.add('pad-ripple');
+                ripple.style.left = '50%';
+                ripple.style.top = '50%';
+                pad.appendChild(ripple);
+
+                ripple.addEventListener('animationend', () => {
+                    ripple.remove();
+                });
+
+                setTimeout(() => {
+                    pad.classList.remove('active');
+                }, 300);
+            }
+
+            // Keep track of playing notes
+            const noteName = getNoteName(padIndex);
+            playingNotes.push(noteName);
+            updatePlayingNotesDisplay();
+
+
+            synth.oscillator.onended = () => {
+                playingNotes = playingNotes.filter(note => note !== noteName);
+                updatePlayingNotesDisplay();
+            };
+        }
+
+
+        function updatePlayingNotesDisplay() {
+            playingNotesElement.textContent = playingNotes.join(", ") || "None";
+        }
+
+
+        // Generate pads
+        const padGrid = document.querySelector('.pad-grid');
+        const numPads = 16;
+        for (let i = 0; i < numPads; i++) {
+            const pad = document.createElement('div');
+            pad.classList.add('pad');
+            pad.dataset.index = i;
+
+            // Neon color generation (simplified) - more sophisticated methods exist
+            const hue = (i * 360 / numPads);
+            pad.style.backgroundColor = `hsl(${hue}, 100%, 50%)`;
+            pad.style.boxShadow = `0 0 10px rgba(0,0,0,0.5), 0 0 20px hsl(${hue}, 100%, 70%)`;
+
+
+            const noteName = getNoteName(i);
+            pad.innerHTML = `<span class="pad-name">${noteName}</span>`;
+
+            pad.addEventListener('click', () => {
+                playNote(i);
+            });
+
+            padGrid.appendChild(pad);
+        }
+
+
+
+
+        // Keyboard support
+        const keyMap = {
+            'q': 0, 'w': 1, 'e': 2, 'r': 3,
+            'a': 4, 's': 5, 'd': 6, 'f': 7,
+            'z': 8, 'x': 9, 'c': 10, 'v': 11,
+            't':12, 'y':13, 'u':14, 'i':15
+        };
+
+        document.addEventListener('keydown', (event) => {
+            const key = event.key.toLowerCase();
+            if (keyMap[key] !== undefined) {
+                playNote(keyMap[key]);
+            }
+        });
+
+
+        // Controls event listeners
+        octaveUpButton.addEventListener('click', () => {
+            currentOctave = Math.min(currentOctave + 1, 7); // Cap at octave 7
+        });
+
+        octaveDownButton.addEventListener('click', () => {
+            currentOctave = Math.max(currentOctave - 1, 1); // Cap at octave 1
+        });
+
+        volumeControl.addEventListener('input', (e) => {
+            currentVolume = parseFloat(e.target.value);
+            masterGain.gain.setValueAtTime(currentVolume, audioContext.currentTime);
+        });
+
+        waveformSelect.addEventListener('change', (e) => {
+            currentWaveform = e.target.value;
+        });
+
+
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
